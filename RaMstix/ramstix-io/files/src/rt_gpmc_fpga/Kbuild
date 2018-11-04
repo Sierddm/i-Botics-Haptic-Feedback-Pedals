@@ -1,0 +1,4 @@
+obj-m := rt_gpmc_fpga.o
+ccflags-y += -I$(KERNEL_SRC)/include/xenomai
+ccflags-y += -I$(KERNEL_SRC)/include/xenomai/posix
+ccflags-y += -I$(KERNEL_SRC)/arch/arm/mach-omap2

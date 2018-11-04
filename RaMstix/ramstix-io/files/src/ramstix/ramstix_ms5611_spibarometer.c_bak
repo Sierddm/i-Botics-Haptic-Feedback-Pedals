@@ -1,0 +1,175 @@
+/**
+ * @file ramstix_ms5611_spibarometer.c
+ * @brief MS5611 barometer implementation
+ * @author Geert Folkertsma, University of Twente
+ *
+ */
+
+#include "ramstix/ramstix_ms5611_spibarometer.h"
+
+// We need to store configuration parameters for the device (C1..C6)
+uint16_t C[MS5611_PROM_REG_COUNT+1] = {0};
+
+const unsigned int OSR = MS5611_OSR_2048; //one-but-highest resolution:
+const double conversion_time_ms = 4.6;       //means 4.6 ms ADC conversion time
+
+// Keep track of last conversion/access times to implement required delays
+struct timespec conversion_start, reset_timestamp, now;
+const unsigned int reset_time_ms = 5; //actually 3, but let's be safe
+
+// Utility function to compute time difference
+int difftime_ms(struct timespec* from, struct timespec* to){
+  return 1000*((long)to->tv_sec - (long)from->tv_sec) + (to->tv_nsec - from->tv_nsec)/1e6;
+}
+
+void delay_ms(const double wait_ms){
+  struct timespec delay_start, delay_now;
+  clock_gettime(CLOCK_REALTIME,&delay_start);
+  clock_gettime(CLOCK_REALTIME,&delay_now);
+  while(difftime_ms(&delay_start,&delay_now) < wait_ms){
+    clock_gettime(CLOCK_REALTIME,&delay_now);
+  }
+}
+
+// Conversion in progress?
+enum MS5611_CONVERSION conversion_state = 0;
+
+// Variable in which to store the most recent raw T and raw P readings
+uint32_t cached_P = 0;
+uint32_t cached_T = 0;
+
+
+void setSPIbits(int fd, unsigned int numBits){
+  ramstixOpenSPI(fd, numBits, 0, MSB_FIRST, MSB_FIRST, 100000);
+}
+
+void ramstixInitMS5611(int fd, unsigned int csPin){
+  // Init the chip select pin
+  ramstixSetPinValue(fd, csPin, 1); //active LOW, so set HIGH first
+  
+  // initialise the SPI interface
+  setSPIbits(fd, 8);
+  
+  // Obtain parameters
+  // Execute device reset, to populate the registers with the PROM calibration params
+  RAMSTIX_PRINT("[MS5611_barometer] Resetting the device on CS %d\n",csPin);
+  ramstixSetPinValue(fd, csPin, 0);
+  ramstixSendSPI(fd, MS5611_RESET);
+  while(!ramstixStatusSPI(fd)){};
+  ramstixSetPinValue(fd, csPin, 1);
+  
+  // Wait 5 milliseconds (3 is required, be on the safe side)
+  delay_ms(reset_time_ms);
+  
+  // Read in all 6 parameters
+  RAMSTIX_PRINT("[MS5611_barometer] Getting calibration parameters\n");
+  
+  uint8_t i = 0;
+  for(i=0; i<MS5611_PROM_REG_COUNT; ++i){
+    // Select which address to read from with 8 bit transfer, and immediately
+    //get the following 16 bits -> use 24-bit interface
+    setSPIbits(fd, 24);
+    ramstixSetPinValue(fd, csPin, 0);
+    uint32_t command = (MS5611_PROM_BASE_ADDR + (i * MS5611_PROM_REG_SIZE))<<16;
+    ramstixSendSPI(fd, command);
+    C[i+1] = ramstixReceiveSPI(fd) & 0x0000ffff; //this is a blocking operation (waits for ramstixStatusSPI)
+    ramstixSetPinValue(fd, csPin, 1);
+    
+    RAMSTIX_PRINT("[MS5611_barometer] C%d: %d\n", i+1, C[i+1]);
+  }
+  
+  // Get the first pressure and temperature readings immediately
+  ramstixMS5611StartConversion(fd,csPin,MS5611_CONVERT_P);
+  delay_ms(conversion_time_ms);
+  cached_P = ramstixMS5611GetConversionResult(fd,csPin);
+  RAMSTIX_PRINT("[MS5611_barometer] cached_P: %u\n",cached_P);
+  
+  ramstixMS5611StartConversion(fd,csPin,MS5611_CONVERT_T);
+  delay_ms(conversion_time_ms);
+  cached_T = ramstixMS5611GetConversionResult(fd,csPin);
+  RAMSTIX_PRINT("[MS5611_barometer] cached_T: %u\n",cached_T);
+  
+  conversion_state = MS5611_IDLE;
+}
+
+double ramstixGetMS5611Pressure(int fd, unsigned int csPin){
+  // Initialise a read if not already busy
+  if(conversion_state == MS5611_IDLE){
+    // Start a T or P conversion
+    ramstixMS5611StartConversion(fd, csPin, MS5611_CONVERT_P);
+    // Store the time at which conversion started
+    clock_gettime(CLOCK_REALTIME,&conversion_start);
+    
+  } else {
+    // Working on a conversion, or done
+    clock_gettime(CLOCK_REALTIME,&now);
+    if(difftime_ms(&conversion_start,&now) >= conversion_time_ms){
+      // Done: get the result and start a new conversion of the other type
+      uint32_t adcval = ramstixMS5611GetConversionResult(fd,csPin);
+      
+      if( conversion_state == MS5611_BUSY_T){
+        ramstixMS5611StartConversion(fd, csPin, MS5611_CONVERT_P);
+        // Also: store the adcval into the proper cached_ variable
+        if(adcval>0) cached_T = adcval;
+      } else {
+        ramstixMS5611StartConversion(fd, csPin, MS5611_CONVERT_T);
+        // Also: store the adcval into the proper cached_ variable
+        if(adcval>0) cached_P = adcval;
+      }
+      // Record the time at wich conversion started
+      clock_gettime(CLOCK_REALTIME,&conversion_start);
+    } else {
+      // Still converting: do nothing
+      // NOP
+    }
+  }
+  
+  // Calculate temp and pressure from calibration params
+  int32_t dT = cached_T - C[5]*(1<<8);
+  // Temperature calculation commented: 20-sim 4C complains about "temp" never used
+  // int32_t temp = 2000 + dT * C[6]/(1<<23); //temperature in 100*°C
+  // RAMSTIX_PRINT("[MS5611_barometer] T: %u C\n",temp);
+  // now calculate temperature-compensated pressure
+  int64_t off = (int64_t)C[2]*(1ull<<16)+((int64_t)C[4]*(int64_t)dT)/(1<<7);
+  int64_t sens = (int64_t)C[1]*(1ull<<15) + ((int64_t)C[3]*(int64_t)dT)/(1<<8);
+  int32_t P = ((int64_t)cached_P * sens/(1ull<<21) - off)/(1ull<<15); //pressure in 100*mbar -> pascal
+  // RAMSTIX_PRINT("[MS5611_barometer] off: %" PRId64 "\nsens: %" PRId64 "\n",off,sens);
+  RAMSTIX_PRINT("[MS5611_barometer] P: %u\n",P);
+  return (double)P;
+}
+
+void ramstixMS5611StartConversion(int fd, unsigned int csPin, enum MS5611_CONVERSION_TYPE type){
+  setSPIbits(fd, 8);
+  if(type == MS5611_CONVERT_T){
+    ramstixSetPinValue(fd, csPin, 0);
+    ramstixSendSPI(fd, (MS5611_D2 + OSR));
+    conversion_state = MS5611_BUSY_T;
+  } else {
+    ramstixSetPinValue(fd, csPin, 0);
+    ramstixSendSPI(fd, (MS5611_D1 + OSR));
+    conversion_state = MS5611_BUSY_P;
+  }
+  // Wait for the command to be sent
+  while(!ramstixStatusSPI(fd)){};
+  ramstixSetPinValue(fd, csPin, 1);
+}
+
+uint32_t ramstixMS5611GetConversionResult(int fd, unsigned int csPin){
+  // Result is 24 bits, but before that we need to send 8 bits read command:
+  // use 32 bits SPI and mask the 8 MSBs---which are meaningless---away
+  setSPIbits(fd, 32);
+  ramstixSetPinValue(fd, csPin, 0);
+  ramstixSendSPI(fd, 0);
+  uint32_t adcval = ramstixReceiveSPI(fd) & 0x00ffffff;
+  RAMSTIX_PRINT("[MS5611_barometer] got ADC val: %u\n",adcval);
+  ramstixSetPinValue(fd, csPin, 1);
+  return adcval;
+}
+
+void ramstixCloseMS5611(int fd, unsigned int csPin){
+  // First close the SPI
+  ramstixCloseSPI(fd);
+  
+  // Then set the csPin high
+  ramstixSetPinValue(fd, csPin, 1);
+}

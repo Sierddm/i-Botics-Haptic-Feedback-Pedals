@@ -1,0 +1,5 @@
+obj-m := gpmc_fpga.o
+
+ccflags-y += -I$(LINUX_DIR)/include/xenomai
+ccflags-y += -I$(LINUX_DIR)/include/xenomai/posix
+ccflags-y += -I$(KERNEL_SRC)/arch/arm/mach-omap2

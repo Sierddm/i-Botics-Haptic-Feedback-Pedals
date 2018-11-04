@@ -1,0 +1,6 @@
+float64 position_left
+float64 velocity_left
+float64 acceleration_left
+float64 position_right
+float64 velocity_right
+float64 acceleration_right

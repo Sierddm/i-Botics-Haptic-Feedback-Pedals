@@ -1,0 +1,4 @@
+float64 distribution_left
+float64 distribution_right
+float64 distance
+float64 platform_velocity

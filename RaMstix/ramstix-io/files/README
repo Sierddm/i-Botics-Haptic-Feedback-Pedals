@@ -1,0 +1,7 @@
+Contents:
+
+Sources files of:
+RTDM kernel driver for GPMC
+Normal kernel driver for GPMC
+RTDM userspace driver for GPMC
+RaMstix userspace driver to control hardware components.
