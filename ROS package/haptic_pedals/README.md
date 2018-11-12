@@ -38,8 +38,14 @@ This ROS package is dependend on the following packages:
 
 To run the demo the following steps should be considered:
 
-1. SSH into the RaMstix using '''SSH root@10.0.5.28''' ww:ram
-2. cd into ramstix-io/files/ and run '''make all'''
+1. SSH into the RaMstix using 
+'''C
+SSH root@10.0.5.28
+''' ww:ram
+2. cd into ramstix-io/files/ and run 
+'''C
+make all
+'''
 3. cd into build/bin/ramstix/unit-tests
 4. run '''./zeromqserver_test'''
 5. on the computer run '''roslaunch turtlebot3_gazebo turtlebot3_empty_world.launch''', this also includes roscore
