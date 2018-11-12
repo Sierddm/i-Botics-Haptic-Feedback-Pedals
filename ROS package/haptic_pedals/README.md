@@ -38,17 +38,17 @@ This ROS package is dependend on the following packages:
 
 To run the demo the following steps should be considered:
 
-1. SSH into the RaMstix using 
-'''C
+1. SSH into the RaMstix using (ww:ram)
+```C
 SSH root@10.0.5.28
-''' ww:ram
+```
 2. cd into ramstix-io/files/ and run 
-'''C
+```C
 make all
-'''
+```
 3. cd into build/bin/ramstix/unit-tests
-4. run '''./zeromqserver_test'''
-5. on the computer run '''roslaunch turtlebot3_gazebo turtlebot3_empty_world.launch''', this also includes roscore
+4. run ```./zeromqserver_test```
+5. on the computer run ```roslaunch turtlebot3_gazebo turtlebot3_empty_world.launch```, this also includes roscore
 6. rosrun all nodes from haptic_pedals (zeromqClient/msd/forceFeedback/pedalDirection/scanToTwist)
 7. determine if the nodes are communicating 
 8. position the pedals in their lowest position
